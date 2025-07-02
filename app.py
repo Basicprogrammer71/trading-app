@@ -42,7 +42,8 @@ if st.sidebar.button("Add Trade"):
         "Account Value": new_value
     }
 
-    trades_df = trades_df.append(new_trade, ignore_index=True)
+    new_trade_df = pd.DataFrame([new_trade])
+trades_df = pd.concat([trades_df, new_trade_df], ignore_index=True)
     trades_df.to_csv(data_file, index=False)
     st.experimental_rerun()
 
