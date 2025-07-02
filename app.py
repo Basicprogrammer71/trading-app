@@ -43,7 +43,7 @@ if st.sidebar.button("Add Trade"):
     }
 
     new_trade_df = pd.DataFrame([new_trade])
-trades_df = pd.concat([trades_df, new_trade_df], ignore_index=True)
+    trades_df = pd.concat([trades_df, new_trade_df], ignore_index=True)
     trades_df.to_csv(data_file, index=False)
     st.experimental_rerun()
 
