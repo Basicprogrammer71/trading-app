@@ -260,5 +260,3 @@ else:
                     st.session_state.trades_df = get_full_data(sheet)
                     st.session_state.full_data_loaded = True
                     st.rerun()
-
-```
