@@ -11,21 +11,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Helper Functions & Caching ---
-@st.cache_data(ttl=600)
-def get_gsheet():
+# --- Helper Functions ---
+
+# DO NOT CACHE the connection client.
+def get_gspread_client():
     """Connects to Google Sheets using the modern gspread method with explicit scopes."""
     try:
-        # Define the necessary scopes for API access
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ]
         creds_dict = st.secrets["gcp_service_account"]
-        # Pass the scopes to the authentication method
         client = gspread.service_account_from_dict(creds_dict, scopes=scopes)
-        sheet = client.open("Trade Tracker Data").sheet1
-        return sheet
+        return client
     except Exception as e:
         st.error(f"🚨 Connection Error: {e}")
         return None
@@ -43,12 +41,13 @@ def process_data(records):
     return df
 
 @st.cache_data(ttl=600)
-def get_initial_data(_sheet):
+def get_initial_data(_client):
     """Fetches only the last 200 records for a fast initial load."""
-    if _sheet is None:
+    if _client is None:
         return pd.DataFrame()
     
-    all_values = _sheet.get_all_values()
+    sheet = _client.open("Trade Tracker Data").sheet1
+    all_values = sheet.get_all_values()
     if len(all_values) <= 1:
         return pd.DataFrame()
         
@@ -58,15 +57,17 @@ def get_initial_data(_sheet):
     return process_data(records)
 
 @st.cache_data(ttl=600)
-def get_full_data(_sheet):
+def get_full_data(_client):
     """Fetches ALL records from the sheet."""
-    if _sheet is None: return pd.DataFrame()
-    records = _sheet.get_all_records()
+    if _client is None: return pd.DataFrame()
+    sheet = _client.open("Trade Tracker Data").sheet1
+    records = sheet.get_all_records()
     return process_data(records)
 
-def update_gsheet(sheet, df):
+def update_gsheet(client, df):
     """Clears and updates the entire Google Sheet."""
     try:
+        sheet = client.open("Trade Tracker Data").sheet1
         df_to_save = df.sort_values(by="Date", ascending=True).copy()
         df_to_save['Date'] = pd.to_datetime(df_to_save['Date']).dt.strftime('%m/%d/%y')
         sheet.clear()
@@ -86,9 +87,9 @@ if 'full_data_loaded' not in st.session_state:
 if 'trades_df' not in st.session_state:
     st.session_state.trades_df = pd.DataFrame()
 
-sheet = get_gsheet()
-if sheet and st.session_state.trades_df.empty:
-    st.session_state.trades_df = get_initial_data(sheet)
+client = get_gspread_client()
+if client and st.session_state.trades_df.empty:
+    st.session_state.trades_df = get_initial_data(client)
 
 trades_df = st.session_state.trades_df
 
@@ -102,8 +103,9 @@ with st.sidebar:
         pl = st.number_input("Profit / Loss", value=0.0, step=0.01)
         notes = st.text_area("Notes")
 
-        submitted = st.form_submit_button("Submit", disabled=(sheet is None))
+        submitted = st.form_submit_button("Submit", disabled=(client is None))
         if submitted:
+            sheet = client.open("Trade Tracker Data").sheet1
             dt_str = date.strftime("%m/%d/%y")
             last_val = trades_df["Account Value"].iloc[0] if not trades_df.empty else 0
             new_val = last_val + pl
@@ -197,16 +199,16 @@ def display_full_data_tabs():
             b_col1, b_col2, b_col3 = st.columns(3)
             if b_col1.button("💾 Save Edits"):
                 st.session_state.trades_df.update(edited_chunk)
-                if update_gsheet(sheet, st.session_state.trades_df):
+                if update_gsheet(client, st.session_state.trades_df):
                     st.success("Saved!"); st.rerun()
             if b_col2.button("🗑️ Delete Selected"):
                 selected_indices = edited_chunk[edited_chunk["Select"]].index
                 st.session_state.trades_df = st.session_state.trades_df.drop(selected_indices)
-                if update_gsheet(sheet, st.session_state.trades_df):
+                if update_gsheet(client, st.session_state.trades_df):
                     st.success("Deleted!"); st.rerun()
             if b_col3.button("⚠️ Clear All"):
                 st.session_state.trades_df = pd.DataFrame(columns=trades_df.columns)
-                if update_gsheet(sheet, st.session_state.trades_df):
+                if update_gsheet(client, st.session_state.trades_df):
                     st.success("Cleared!"); st.rerun()
         else:
             st.warning("No data to display.")
@@ -246,14 +248,12 @@ def display_full_data_tabs():
 if st.session_state.full_data_loaded:
     display_full_data_tabs()
 else:
-    # Iterate through the tabs using their index and title
     for i, title in enumerate(tab_titles):
-        if i > 0:  # Apply this only to the tabs after the Dashboard
+        if i > 0:
             with tabs[i]:
                 st.info("A full data download is required for this view.")
-                # Use the 'title' string to create a unique key
                 if st.button("Load Full History", key=f"load_{title}"):
                     with st.spinner("Fetching all trades..."):
-                        st.session_state.trades_df = get_full_data(sheet)
+                        st.session_state.trades_df = get_full_data(client)
                         st.session_state.full_data_loaded = True
                         st.rerun()
