@@ -45,10 +45,8 @@ def get_initial_data(_sheet):
     if _sheet is None:
         return pd.DataFrame()
     
-    # Get all values and then take the last 200 rows + header.
-    # This is often faster than getting all records for very large sheets.
     all_values = _sheet.get_all_values()
-    if len(all_values) <= 1: # Only header or empty
+    if len(all_values) <= 1:
         return pd.DataFrame()
         
     header = all_values[0]
@@ -65,7 +63,6 @@ def get_full_data(_sheet):
 
 def update_gsheet(sheet, df):
     """Clears and updates the entire Google Sheet."""
-    # (Function is unchanged)
     try:
         df_to_save = df.sort_values(by="Date", ascending=True).copy()
         df_to_save['Date'] = pd.to_datetime(df_to_save['Date']).dt.strftime('%m/%d/%y')
@@ -81,7 +78,6 @@ def update_gsheet(sheet, df):
 # --- Main App Logic ---
 st.markdown("<h1 style='text-align: center;'>Trade Tracker</h1>", unsafe_allow_html=True)
 
-# Initialize session state for our data and loading status
 if 'full_data_loaded' not in st.session_state:
     st.session_state.full_data_loaded = False
 if 'trades_df' not in st.session_state:
@@ -89,16 +85,14 @@ if 'trades_df' not in st.session_state:
 
 sheet = get_gsheet()
 if sheet and st.session_state.trades_df.empty:
-    # On first run, load only the initial, small dataset
     st.session_state.trades_df = get_initial_data(sheet)
 
 trades_df = st.session_state.trades_df
 
-# --- Sidebar (Unchanged) ---
+# --- Sidebar ---
 with st.sidebar:
     st.header("➕ Add New Trade")
     with st.form("trade_form", clear_on_submit=True):
-        # (form elements are unchanged)
         date = st.date_input("Date")
         position = st.text_input("Position")
         trade_type = st.selectbox("Type", ["Stock", "Option", "Crypto", "ETF", "Other"])
@@ -113,21 +107,22 @@ with st.sidebar:
             
             sheet.append_row([dt_str, position, trade_type, pl, notes, new_val])
             st.success("✅ Trade added!")
-            # Clear all caches and state to force a fresh reload
+            
             st.cache_data.clear()
             st.session_state.full_data_loaded = False
             st.session_state.trades_df = pd.DataFrame()
             st.rerun()
 
 # --- Main Content Tabs ---
-tabs = st.tabs(["Dashboard", "All Trades", "Historical Overview"])
+tab_titles = ["Dashboard", "All Trades", "Historical Overview"]
+tabs = st.tabs(tab_titles)
 
-with tabs[0]: # Dashboard
+with tabs[0]:
     st.subheader("Dashboard")
     if not trades_df.empty:
         if not st.session_state.full_data_loaded:
             st.info("ℹ️ Dashboard is showing stats based on the last 200 trades. For a full overview, load the complete history in the other tabs.")
-        # (Dashboard card and chart logic is unchanged)
+
         now = datetime.now()
         month_df = trades_df[(trades_df["Date"].dt.month == now.month) & (trades_df["Date"].dt.year == now.year)]
         year_df = trades_df[trades_df["Date"].dt.year == now.year]
@@ -163,12 +158,10 @@ with tabs[0]: # Dashboard
         st.warning("No data to display.")
 
 def display_full_data_tabs():
-    """Logic for tabs that need the full dataset."""
-    with tabs[1]: # All Trades
+    """Renders the content for tabs that require the full dataset."""
+    with tabs[1]:
         st.subheader("All Trades")
-        # Pagination logic from before, now uses the session state df
         if not trades_df.empty:
-            # (Pagination and data editor logic is unchanged)
             if 'page' not in st.session_state:
                 st.session_state.page = 0
 
@@ -215,10 +208,9 @@ def display_full_data_tabs():
         else:
             st.warning("No data to display.")
 
-    with tabs[2]: # Historical Overview
+    with tabs[2]:
         st.subheader("Historical Overview")
         if not trades_df.empty:
-            # (Historical overview logic is unchanged)
             yrs = sorted(trades_df["Date"].dt.year.unique(), reverse=True)
             sel_year = st.selectbox("Select Year", yrs, key="historical_year")
             dfy = trades_df[trades_df["Date"].dt.year == sel_year].copy()
@@ -251,12 +243,14 @@ def display_full_data_tabs():
 if st.session_state.full_data_loaded:
     display_full_data_tabs()
 else:
-    # For the other two tabs, show a button to load the full data
-    for tab in tabs[1:]:
-        with tab:
-            st.info("Full trade history is needed for this view.")
-            if st.button("Load Full History", key=f"load_{tab.title()}"):
-                with st.spinner("Fetching all trades from Google Sheets..."):
-                    st.session_state.trades_df = get_full_data(sheet)
-                    st.session_state.full_data_loaded = True
-                    st.rerun()
+    # Iterate through the tabs using their index and title
+    for i, title in enumerate(tab_titles):
+        if i > 0:  # Apply this only to the tabs after the Dashboard
+            with tabs[i]:
+                st.info("A full data download is required for this view.")
+                # Use the 'title' string to create a unique key
+                if st.button("Load Full History", key=f"load_{title}"):
+                    with st.spinner("Fetching all trades..."):
+                        st.session_state.trades_df = get_full_data(sheet)
+                        st.session_state.full_data_loaded = True
+                        st.rerun()
