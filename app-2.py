@@ -31,9 +31,7 @@ def process_data(records):
         return pd.DataFrame()
     
     df = pd.DataFrame(records)
-    # Use errors='coerce' to turn bad dates into NaT (Not a Time)
     df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%y", errors='coerce')
-    # Drop rows where the date could not be parsed
     df.dropna(subset=['Date'], inplace=True)
     df["P/L"] = pd.to_numeric(df["P/L"], errors='coerce').fillna(0)
     df["Account Value"] = pd.to_numeric(df["Account Value"], errors='coerce').fillna(0)
@@ -42,20 +40,26 @@ def process_data(records):
 
 @st.cache_data(ttl=600)
 def get_initial_data(_client):
-    """Fetches only the last 200 records for a fast initial load."""
+    """Fetches only the last 200 records for a fast initial load by getting a specific range."""
     if _client is None: return pd.DataFrame()
     try:
         sheet = _client.open("Trade Tracker Data").sheet1
-        all_values = sheet.get_all_values()
-        if len(all_values) <= 1: return pd.DataFrame()
         
-        header = all_values[0]
-        data = all_values[-200:]
-        records = [dict(zip(header, row)) for row in data]
+        # Get total rows and columns to calculate the correct range
+        total_rows = sheet.row_count
+        total_cols = sheet.col_count
+        
+        # Define the range to get the header and the last 200 data rows
+        # max(2, ...) ensures we don't request a row index less than 2
+        start_row = max(2, total_rows - 199)
+        
+        # Fetch header and data in two efficient calls
+        header = sheet.row_values(1)
+        data_range = sheet.get(f"A{start_row}:{gspread.utils.rowcol_to_a1(total_rows, total_cols)[-1]}{total_rows}")
+
+        records = [dict(zip(header, row)) for row in data_range]
         return process_data(records)
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error("Spreadsheet 'Trade Tracker Data' not found. Please check the name.")
-        return pd.DataFrame()
+        
     except Exception as e:
         st.error(f"Could not load initial data: {e}")
         return pd.DataFrame()
@@ -63,16 +67,20 @@ def get_initial_data(_client):
 
 @st.cache_data(ttl=600)
 def get_full_data(_client):
-    """Fetches ALL records from the sheet."""
+    """Fetches ALL records from the sheet using the more efficient get_all_values() method."""
     if _client is None: return pd.DataFrame()
     try:
         sheet = _client.open("Trade Tracker Data").sheet1
-        records = sheet.get_all_records()
+        all_values = sheet.get_all_values()
+        if len(all_values) <= 1: return pd.DataFrame()
+        
+        header = all_values[0]
+        data = all_values[1:]
+        records = [dict(zip(header, row)) for row in data]
         return process_data(records)
     except Exception as e:
         st.error(f"Could not load full data: {e}")
         return pd.DataFrame()
-
 
 def update_gsheet(client, df):
     """Clears and updates the entire Google Sheet."""
@@ -167,7 +175,6 @@ with tabs[0]:
 
         st.markdown("---")
         st.subheader("Account Value Over Time")
-        # Use Streamlit's lightweight native chart
         chart_data = trades_df.set_index("Date")[["Account Value"]].sort_index()
         st.line_chart(chart_data)
     else:
@@ -176,6 +183,7 @@ with tabs[0]:
 def display_full_data_tabs():
     """Renders the content for tabs that require the full dataset."""
     with tabs[1]:
+        # This tab remains unchanged
         st.subheader("All Trades")
         if not trades_df.empty:
             if 'page' not in st.session_state:
@@ -189,20 +197,14 @@ def display_full_data_tabs():
             
             edited_chunk = st.data_editor(
                 paginated_df, use_container_width=True, key="paginated_editor", hide_index=True,
-                column_config={
-                    "P/L": st.column_config.NumberColumn(format="$%.2f"),
-                    "Account Value": st.column_config.NumberColumn(format="$%.2f"),
-                    "Select": st.column_config.CheckboxColumn(default=False)
-                }
+                column_config={"P/L": st.column_config.NumberColumn(format="$%.2f"), "Account Value": st.column_config.NumberColumn(format="$%.2f"), "Select": st.column_config.CheckboxColumn(default=False)}
             )
 
             col1, col2, col3, col4 = st.columns([1, 1, 3, 3])
             if col1.button("⬅️ Previous", disabled=(st.session_state.page == 0)):
-                st.session_state.page -= 1
-                st.rerun()
+                st.session_state.page -= 1; st.rerun()
             if col2.button("Next ➡️", disabled=(end_idx >= len(trades_df))):
-                st.session_state.page += 1
-                st.rerun()
+                st.session_state.page += 1; st.rerun()
             col4.write(f"Showing rows {start_idx+1}–{min(end_idx, len(trades_df))} of {len(trades_df)}")
 
             st.divider()
@@ -236,22 +238,28 @@ def display_full_data_tabs():
             all_months_df = pd.DataFrame({'Month': range(1, 13)})
             monthly_summary = pd.merge(all_months_df, monthly_summary, on='Month', how='left').fillna(0)
             
-            cols = st.columns(4)
+            # --- NEW RESPONSIVE GRID LAYOUT ---
+            html_content = "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;'>"
             for index, row in monthly_summary.iterrows():
                 month_num = int(row['Month'])
                 month_name = datetime(1900, month_num, 1).strftime('%B')
                 plm = row['PL']; trade_count = int(row['Trades'])
+                
                 if trade_count == 0: bg_color = "#1e1e1e"
                 elif plm < 0: bg_color = "#660000"
                 else: bg_color = "#003300"
-                col = cols[index % 4]
-                col.markdown(f"""
-                <div style='background-color:{bg_color}; padding: 15px; border-radius: 12px; text-align: center; color: white; margin-bottom: 15px;'>
+                
+                pl_color = "#FF3333" if plm < 0 else "white"
+
+                html_content += f"""
+                <div style='background-color:{bg_color}; padding: 15px; border-radius: 12px; text-align: center; color: white;'>
                     <h5>{month_name}</h5>
-                    <h4 style='color: {"#FF3333" if plm < 0 else "white"};'>${plm:,.2f}</h4>
+                    <h4 style='color: {pl_color};'>${plm:,.2f}</h4>
                     <p>Trades: {trade_count}</p>
                 </div>
-                """, unsafe_allow_html=True)
+                """
+            html_content += "</div>"
+            st.markdown(html_content, unsafe_allow_html=True)
         else:
             st.warning("No data available.")
 
