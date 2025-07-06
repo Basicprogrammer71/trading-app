@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 from datetime import datetime
-import plotly.express as px
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -12,8 +11,6 @@ st.set_page_config(
 )
 
 # --- Helper Functions ---
-
-# DO NOT CACHE the connection client.
 def get_gspread_client():
     """Connects to Google Sheets using the modern gspread method with explicit scopes."""
     try:
@@ -43,14 +40,11 @@ def process_data(records):
 @st.cache_data(ttl=600)
 def get_initial_data(_client):
     """Fetches only the last 200 records for a fast initial load."""
-    if _client is None:
-        return pd.DataFrame()
-    
+    if _client is None: return pd.DataFrame()
     sheet = _client.open("Trade Tracker Data").sheet1
     all_values = sheet.get_all_values()
-    if len(all_values) <= 1:
-        return pd.DataFrame()
-        
+    if len(all_values) <= 1: return pd.DataFrame()
+    
     header = all_values[0]
     data = all_values[-200:]
     records = [dict(zip(header, row)) for row in data]
@@ -155,10 +149,10 @@ with tabs[0]:
         card(c2, "💼 Overall", len(trades_df), overall_pl, last_overall)
         card(c3, "📆 This Year", len(year_df), yearly_pl, last_year)
 
-        chart_df = trades_df.iloc[::-1]
-        daily_summary = chart_df.set_index('Date').resample('D').last().dropna(subset=['Account Value']).reset_index()
-        fig = px.line(daily_summary, x="Date", y="Account Value", markers=True, template="plotly_dark", title="Account Value Over Time")
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("---")
+        st.subheader("Account Value Over Time")
+        chart_df = trades_df.set_index("Date")[["Account Value"]].sort_index()
+        st.line_chart(chart_df)
     else:
         st.warning("No data to display.")
 
