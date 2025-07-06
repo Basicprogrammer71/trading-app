@@ -44,29 +44,18 @@ def process_data(records):
 
 @st.cache_data(ttl=600)
 def get_initial_data(_client):
-    """Fetches only the last 200 records for a fast initial load by getting a specific range."""
+    """Fetches only the last 200 records for a fast initial load. Reverted to safer method."""
     if _client is None: return pd.DataFrame()
     try:
         sheet = _client.open("Trade Tracker Data").sheet1
+        all_values = sheet.get_all_values()
+        if len(all_values) <= 1: return pd.DataFrame()
         
-        header = sheet.row_values(1)
-        num_headers = len(header)
-
-        total_rows = sheet.row_count
-        start_row = max(2, total_rows - 199)
-        
-        # Fetch the last 200 data rows
-        data_range = sheet.get(f"A{start_row}:{gspread.utils.rowcol_to_a1(total_rows, num_headers)[0]}{total_rows}")
-
-        records = []
-        for row in data_range:
-            # Pad the row if it's shorter than the header
-            while len(row) < num_headers:
-                row.append('')
-            records.append(dict(zip(header, row)))
-            
+        header = all_values[0]
+        # Get last 200 rows from the full dataset
+        data = all_values[-200:]
+        records = [dict(zip(header, row)) for row in data]
         return process_data(records)
-        
     except Exception as e:
         st.error(f"Could not load initial data: {e}")
         return pd.DataFrame()
@@ -237,7 +226,15 @@ def display_full_data_tabs():
         if not trades_df.empty:
             yrs = sorted(trades_df["Date"].dt.year.unique(), reverse=True)
             sel_year = st.selectbox("Select Year", yrs, key="historical_year")
+            
+            # Filter the dataframe for the selected year
             dfy = trades_df[trades_df["Date"].dt.year == sel_year].copy()
+            
+            # --- DEBUGGING TABLE ---
+            with st.expander(f"Filtered Data for {sel_year}"):
+                st.dataframe(dfy)
+            # --- END DEBUGGING ---
+                
             dfy['Month'] = dfy['Date'].dt.month
             
             monthly_summary = dfy.groupby('Month').agg(PL=('P/L', 'sum'),Trades=('P/L', 'count')).reset_index()
