@@ -97,15 +97,12 @@ def update_gsheet(client, df):
 # --- Main App Logic ---
 st.markdown("<h1 style='text-align: center;'>Trade Tracker</h1>", unsafe_allow_html=True)
 
-# Initialize session state
 if 'full_data_loaded' not in st.session_state:
     st.session_state.full_data_loaded = False
 if 'trades_df' not in st.session_state:
     st.session_state.trades_df = pd.DataFrame()
 
 client = get_gspread_client()
-
-# Load initial data for the dashboard if the dataframe in session state is empty
 if client and st.session_state.trades_df.empty:
     st.session_state.trades_df = get_initial_data(client)
 
@@ -122,7 +119,6 @@ with st.sidebar:
         submitted = st.form_submit_button("Submit", disabled=(client is None))
         if submitted:
             sheet = client.open("Trade Tracker Data").sheet1
-            # Use the dataframe from session state for calculations
             trades_df_for_calc = st.session_state.trades_df
             dt_str = date.strftime("%m/%d/%y")
             last_val = trades_df_for_calc["Account Value"].iloc[0] if not trades_df_for_calc.empty else 0
@@ -140,7 +136,7 @@ with st.sidebar:
 tab_titles = ["Dashboard", "All Trades", "Historical Overview"]
 tabs = st.tabs(tab_titles)
 
-# Dashboard Tab (uses initial data)
+# Dashboard Tab
 with tabs[0]:
     st.subheader("Dashboard")
     dashboard_df = st.session_state.trades_df
@@ -182,7 +178,7 @@ with tabs[0]:
     else:
         st.warning("No data to display.")
 
-# All Trades Tab (loads full data if needed, then shows paginated table)
+# All Trades Tab
 with tabs[1]:
     st.subheader("All Trades")
     if not st.session_state.full_data_loaded:
@@ -233,7 +229,7 @@ with tabs[1]:
     else:
         st.warning("No data to display.")
 
-# Historical Overview Tab (loads full data if needed, then shows view)
+# Historical Overview Tab
 with tabs[2]:
     st.subheader("Historical Overview")
     if not st.session_state.full_data_loaded:
@@ -254,26 +250,37 @@ with tabs[2]:
         all_months_df = pd.DataFrame({'Month': range(1, 13)})
         monthly_summary = pd.merge(all_months_df, monthly_summary, on='Month', how='left').fillna(0)
         
-        html_content = "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;'>"
-        for index, row in monthly_summary.iterrows():
-            month_num = int(row['Month'])
-            month_name = datetime(1900, month_num, 1).strftime('%B')
-            plm = row['PL']; trade_count = int(row['Trades'])
+        # Convert the summary to a list of dictionaries to iterate through
+        months_data = monthly_summary.to_dict('records')
+        
+        # ### NEW ROW-BY-ROW LAYOUT ###
+        # Iterate through the data in chunks of 4 to create rows
+        for i in range(0, 12, 4):
+            # Get the data for the next row of months
+            chunk = months_data[i:i+4]
             
-            if trade_count == 0: bg_color = "#1e1e1e"
-            elif plm < 0: bg_color = "#660000"
-            else: bg_color = "#003300"
+            # Create a new row of columns
+            cols = st.columns(4)
             
-            pl_color = "#FF3333" if plm < 0 else "white"
+            # Populate each column in this row
+            for j, month_data in enumerate(chunk):
+                with cols[j]:
+                    month_num = int(month_data['Month'])
+                    month_name = datetime(1900, month_num, 1).strftime('%B')
+                    plm = month_data['PL']
+                    trade_count = int(month_data['Trades'])
+                    
+                    if trade_count == 0: bg_color = "#1e1e1e"
+                    elif plm < 0: bg_color = "#660000"
+                    else: bg_color = "#003300"
+                    pl_color = "#FF3333" if plm < 0 else "white"
 
-            html_content += f"""
-            <div style='background-color:{bg_color}; padding: 15px; border-radius: 12px; text-align: center; color: white;'>
-                <h5>{month_name}</h5>
-                <h4 style='color: {pl_color};'>${plm:,.2f}</h4>
-                <p>Trades: {trade_count}</p>
-            </div>
-            """
-        html_content += "</div>"
-        st.markdown(html_content, unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div style='background-color:{bg_color}; padding: 15px; border-radius: 12px; text-align: center; color: white; margin-bottom: 10px;'>
+                        <h5>{month_name}</h5>
+                        <h4 style='color: {pl_color};'>${plm:,.2f}</h4>
+                        <p>Trades: {trade_count}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
     else:
         st.warning("No data available.")
