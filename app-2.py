@@ -31,6 +31,10 @@ def process_data(records):
         return pd.DataFrame()
     
     df = pd.DataFrame(records)
+    if 'Date' not in df.columns:
+        st.error("Data integrity error: 'Date' column is missing from the sheet's header (Row 1).")
+        return pd.DataFrame()
+
     df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%y", errors='coerce')
     df.dropna(subset=['Date'], inplace=True)
     df["P/L"] = pd.to_numeric(df["P/L"], errors='coerce').fillna(0)
@@ -45,19 +49,22 @@ def get_initial_data(_client):
     try:
         sheet = _client.open("Trade Tracker Data").sheet1
         
-        # Get total rows and columns to calculate the correct range
+        header = sheet.row_values(1)
+        num_headers = len(header)
+
         total_rows = sheet.row_count
-        total_cols = sheet.col_count
-        
-        # Define the range to get the header and the last 200 data rows
-        # max(2, ...) ensures we don't request a row index less than 2
         start_row = max(2, total_rows - 199)
         
-        # Fetch header and data in two efficient calls
-        header = sheet.row_values(1)
-        data_range = sheet.get(f"A{start_row}:{gspread.utils.rowcol_to_a1(total_rows, total_cols)[-1]}{total_rows}")
+        # Fetch the last 200 data rows
+        data_range = sheet.get(f"A{start_row}:{gspread.utils.rowcol_to_a1(total_rows, num_headers)[0]}{total_rows}")
 
-        records = [dict(zip(header, row)) for row in data_range]
+        records = []
+        for row in data_range:
+            # Pad the row if it's shorter than the header
+            while len(row) < num_headers:
+                row.append('')
+            records.append(dict(zip(header, row)))
+            
         return process_data(records)
         
     except Exception as e:
@@ -183,7 +190,6 @@ with tabs[0]:
 def display_full_data_tabs():
     """Renders the content for tabs that require the full dataset."""
     with tabs[1]:
-        # This tab remains unchanged
         st.subheader("All Trades")
         if not trades_df.empty:
             if 'page' not in st.session_state:
@@ -238,7 +244,6 @@ def display_full_data_tabs():
             all_months_df = pd.DataFrame({'Month': range(1, 13)})
             monthly_summary = pd.merge(all_months_df, monthly_summary, on='Month', how='left').fillna(0)
             
-            # --- NEW RESPONSIVE GRID LAYOUT ---
             html_content = "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;'>"
             for index, row in monthly_summary.iterrows():
                 month_num = int(row['Month'])
