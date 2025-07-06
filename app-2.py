@@ -14,11 +14,16 @@ st.set_page_config(
 # --- Helper Functions & Caching ---
 @st.cache_data(ttl=600)
 def get_gsheet():
-    """Connects to Google Sheets using the modern, recommended gspread method."""
+    """Connects to Google Sheets using the modern gspread method with explicit scopes."""
     try:
+        # Define the necessary scopes for API access
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
         creds_dict = st.secrets["gcp_service_account"]
-        # This is the new, simpler authentication method.
-        client = gspread.service_account_from_dict(creds_dict)
+        # Pass the scopes to the authentication method
+        client = gspread.service_account_from_dict(creds_dict, scopes=scopes)
         sheet = client.open("Trade Tracker Data").sheet1
         return sheet
     except Exception as e:
