@@ -31,7 +31,10 @@ def process_data(records):
         return pd.DataFrame()
     
     df = pd.DataFrame(records)
+    # Use errors='coerce' to turn bad dates into NaT (Not a Time)
     df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%y", errors='coerce')
+    # Drop rows where the date could not be parsed
+    df.dropna(subset=['Date'], inplace=True)
     df["P/L"] = pd.to_numeric(df["P/L"], errors='coerce').fillna(0)
     df["Account Value"] = pd.to_numeric(df["Account Value"], errors='coerce').fillna(0)
     df = df.sort_values(by="Date", ascending=False).reset_index(drop=True)
@@ -41,29 +44,42 @@ def process_data(records):
 def get_initial_data(_client):
     """Fetches only the last 200 records for a fast initial load."""
     if _client is None: return pd.DataFrame()
-    sheet = _client.open("Trade Tracker Data").sheet1
-    all_values = sheet.get_all_values()
-    if len(all_values) <= 1: return pd.DataFrame()
-    
-    header = all_values[0]
-    data = all_values[-200:]
-    records = [dict(zip(header, row)) for row in data]
-    return process_data(records)
+    try:
+        sheet = _client.open("Trade Tracker Data").sheet1
+        all_values = sheet.get_all_values()
+        if len(all_values) <= 1: return pd.DataFrame()
+        
+        header = all_values[0]
+        data = all_values[-200:]
+        records = [dict(zip(header, row)) for row in data]
+        return process_data(records)
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error("Spreadsheet 'Trade Tracker Data' not found. Please check the name.")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Could not load initial data: {e}")
+        return pd.DataFrame()
+
 
 @st.cache_data(ttl=600)
 def get_full_data(_client):
     """Fetches ALL records from the sheet."""
     if _client is None: return pd.DataFrame()
-    sheet = _client.open("Trade Tracker Data").sheet1
-    records = sheet.get_all_records()
-    return process_data(records)
+    try:
+        sheet = _client.open("Trade Tracker Data").sheet1
+        records = sheet.get_all_records()
+        return process_data(records)
+    except Exception as e:
+        st.error(f"Could not load full data: {e}")
+        return pd.DataFrame()
+
 
 def update_gsheet(client, df):
     """Clears and updates the entire Google Sheet."""
     try:
         sheet = client.open("Trade Tracker Data").sheet1
         df_to_save = df.sort_values(by="Date", ascending=True).copy()
-        df_to_save['Date'] = pd.to_datetime(df_to_save['Date']).dt.strftime('%m/%d/%y')
+        df_to_save['Date'] = df_to_save['Date'].dt.strftime('%m/%d/%y')
         sheet.clear()
         sheet.append_row(df_to_save.columns.tolist())
         sheet.append_rows(df_to_save.astype(str).values.tolist())
@@ -151,10 +167,11 @@ with tabs[0]:
 
         st.markdown("---")
         st.subheader("Account Value Over Time")
-        chart_df = trades_df.set_index("Date")[["Account Value"]].sort_index()
-        st.line_chart(chart_df)
+        # Use Streamlit's lightweight native chart
+        chart_data = trades_df.set_index("Date")[["Account Value"]].sort_index()
+        st.line_chart(chart_data)
     else:
-        st.warning("No data to display.")
+        st.warning("No data to display. Please add a trade or check for connection errors above.")
 
 def display_full_data_tabs():
     """Renders the content for tabs that require the full dataset."""
