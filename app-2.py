@@ -189,6 +189,10 @@ with tabs[1]:
 
     trades_df = st.session_state.trades_df
     if not trades_df.empty:
+        # Add the "Select" column to the DataFrame for editing
+        df_for_editing = trades_df.copy()
+        df_for_editing.insert(0, "Select", False)
+
         if 'page' not in st.session_state:
             st.session_state.page = 0
 
@@ -196,11 +200,19 @@ with tabs[1]:
         start_idx = st.session_state.page * items_per_page
         end_idx = start_idx + items_per_page
         
-        paginated_df = trades_df.iloc[start_idx:end_idx]
+        paginated_df = df_for_editing.iloc[start_idx:end_idx]
         
+        # Edit the paginated chunk
         edited_chunk = st.data_editor(
-            paginated_df, use_container_width=True, key="paginated_editor", hide_index=True,
-            column_config={"P/L": st.column_config.NumberColumn(format="$%.2f"), "Account Value": st.column_config.NumberColumn(format="$%.2f"), "Select": st.column_config.CheckboxColumn(default=False)}
+            paginated_df, 
+            use_container_width=True, 
+            key="paginated_editor", 
+            hide_index=True,
+            column_config={
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "P/L": st.column_config.NumberColumn(format="$%.2f"), 
+                "Account Value": st.column_config.NumberColumn(format="$%.2f")
+            }
         )
 
         col1, col2, col3, col4 = st.columns([1, 1, 3, 3])
@@ -214,17 +226,27 @@ with tabs[1]:
 
         b_col1, b_col2, b_col3 = st.columns(3)
         if b_col1.button("💾 Save Edits"):
+            # Before saving, apply the edits from the chunk back to the main DataFrame
             st.session_state.trades_df.update(edited_chunk)
-            if update_gsheet(client, st.session_state.trades_df):
+            # We don't need to save the "Select" column to the Google Sheet
+            df_to_save = st.session_state.trades_df.drop(columns=['Select'], errors='ignore')
+            if update_gsheet(client, df_to_save):
                 st.success("Saved!"); st.rerun()
+
         if b_col2.button("🗑️ Delete Selected"):
+            # Get the indices of selected rows from the edited chunk
             selected_indices = edited_chunk[edited_chunk["Select"]].index
+            # Drop those indices from the main DataFrame in session state
             st.session_state.trades_df = st.session_state.trades_df.drop(selected_indices)
-            if update_gsheet(client, st.session_state.trades_df):
+            # Save the updated main DataFrame (without the "Select" column)
+            df_to_save = st.session_state.trades_df.drop(columns=['Select'], errors='ignore')
+            if update_gsheet(client, df_to_save):
                 st.success("Deleted!"); st.rerun()
+                
         if b_col3.button("⚠️ Clear All"):
             st.session_state.trades_df = pd.DataFrame(columns=trades_df.columns)
-            if update_gsheet(client, st.session_state.trades_df):
+            df_to_save = st.session_state.trades_df.drop(columns=['Select'], errors='ignore')
+            if update_gsheet(client, df_to_save):
                 st.success("Cleared!"); st.rerun()
     else:
         st.warning("No data to display.")
