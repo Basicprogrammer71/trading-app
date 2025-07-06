@@ -1,21 +1,3 @@
-I understand this is frustrating. When an app works on a laptop but consistently fails on mobile, even after pagination, it points to a final, critical bottleneck: the **initial data download**.
-
-Your app still loads the *entire* trade history from Google Sheets into memory at the very beginning. For a large sheet, this initial download can be too slow or too large for a mobile browser, causing it to time out and crash before it can even display the page.
-
-The definitive solution is to implement **lazy loading**. We will change the app to do the following:
-
-1.  **Instantly Load a Small Sample:** On startup, the app will only download the last 200 trades. This is very fast and is enough data to power the Dashboard and recent activity.
-2.  **Load the Full History on Demand:** The complete trade history will only be downloaded when you navigate to the "All Trades" or "Historical Overview" tabs and click a button.
-
-This ensures the app loads instantly on any device.
-
------
-
-### Final Optimized Code with Lazy Loading
-
-Please replace your entire `app-2.py` file with the code below. This is a significant restructuring that focuses on minimizing the initial load.
-
-```python
 import streamlit as st
 import pandas as pd
 import gspread
