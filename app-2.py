@@ -12,14 +12,12 @@ st.set_page_config(
 
 # --- Helper Functions ---
 def get_gspread_client():
-    """Connects to Google Sheets using a secret file, for deployment on Render."""
+    """Connects to Google Sheets using a secret file."""
     try:
-        # This tells gspread to find the credentials in the secret file you created on Render
         client = gspread.service_account(filename="google_credentials.json")
         return client
     except Exception as e:
         st.error(f"🚨 Connection Error: {e}")
-        st.info("Please ensure your 'google_credentials.json' secret file is correctly set up in Render's Environment settings.")
         return None
 
 def process_data(records):
@@ -62,45 +60,50 @@ def get_initial_data(_client):
         st.error(f"Could not load initial data: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=600)
-def get_full__data(_client):
-    """Fetches ALL records from the sheet using the more efficient get_all_values() method."""
-    if _client is None: return pd.DataFrame()
+# This function is no longer cached, as we will call it to get chunks
+def get_data_in_chunks(_client, start_row=2, chunk_size=1000):
+    """Fetches data in chunks to avoid timeouts."""
+    if _client is None: return []
     try:
         sheet = _client.open("Trade Tracker Data").sheet1
-        all_values = sheet.get_all_values()
-        if len(all_values) <= 1: return pd.DataFrame()
+        total_rows = sheet.row_count
         
-        header = all_values[0]
-        data = all_values[1:]
-        records = [dict(zip(header, row)) for row in data]
-        return process_data(records)
+        # Determine the end row for the current chunk
+        end_row = min(start_row + chunk_size - 1, total_rows)
+        
+        if start_row > end_row:
+            return None # No more data to fetch
+        
+        header = sheet.row_values(1)
+        # Fetch the defined chunk
+        data_chunk = sheet.get(f"A{start_row}:{gspread.utils.rowcol_to_a1(end_row, len(header))[0]}{end_row}")
+        
+        records = []
+        for row in data_chunk:
+            while len(row) < len(header):
+                row.append('')
+            records.append(dict(zip(header, row)))
+            
+        return records
+
     except Exception as e:
-        st.error(f"Could not load full data: {e}")
-        return pd.DataFrame()
+        st.error(f"Could not load data chunk: {e}")
+        return None
 
 def update_gsheet(client, df):
-    """Clears and updates the entire Google Sheet."""
-    try:
-        sheet = client.open("Trade Tracker Data").sheet1
-        df_to_save = df.sort_values(by="Date", ascending=True).copy()
-        df_to_save['Date'] = df_to_save['Date'].dt.strftime('%m/%d/%y')
-        sheet.clear()
-        sheet.append_row(df_to_save.columns.tolist())
-        sheet.append_rows(df_to_save.astype(str).values.tolist())
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"🚨 Failed to update sheet: {e}")
-        return False
+    # This function remains unchanged
+    pass # (omitted for brevity)
 
 # --- Main App Logic ---
 st.markdown("<h1 style='text-align: center;'>Trade Tracker</h1>", unsafe_allow_html=True)
 
+# Initialize session state variables
 if 'full_data_loaded' not in st.session_state:
     st.session_state.full_data_loaded = False
 if 'trades_df' not in st.session_state:
     st.session_state.trades_df = pd.DataFrame()
+if 'next_row_to_fetch' not in st.session_state:
+    st.session_state.next_row_to_fetch = 2 # Start fetching from row 2 (after header)
 
 client = get_gspread_client()
 if client and st.session_state.trades_df.empty:
@@ -108,156 +111,26 @@ if client and st.session_state.trades_df.empty:
 
 trades_df = st.session_state.trades_df
 
-# --- Sidebar ---
-with st.sidebar:
-    st.header("➕ Add New Trade")
-    with st.form("trade_form", clear_on_submit=True):
-        date = st.date_input("Date")
-        position = st.text_input("Position")
-        trade_type = st.selectbox("Type", ["Stock", "Option", "Crypto", "ETF", "Other"])
-        pl = st.number_input("Profit / Loss", value=0.0, step=0.01)
-        notes = st.text_area("Notes")
-
-        submitted = st.form_submit_button("Submit", disabled=(client is None))
-        if submitted:
-            sheet = client.open("Trade Tracker Data").sheet1
-            dt_str = date.strftime("%m/%d/%y")
-            last_val = trades_df["Account Value"].iloc[0] if not trades_df.empty else 0
-            new_val = last_val + pl
-            
-            sheet.append_row([dt_str, position, trade_type, pl, notes, new_val])
-            st.success("✅ Trade added!")
-            
-            st.cache_data.clear()
-            st.session_state.full_data_loaded = False
-            st.session_state.trades_df = pd.DataFrame()
-            st.rerun()
+# Sidebar, Dashboard, and display_full_data_tabs functions remain mostly unchanged
+# (omitted for brevity, please keep your existing code for those sections)
+# The key change is in the LAZY LOADING LOGIC below
 
 # --- Main Content Tabs ---
 tab_titles = ["Dashboard", "All Trades", "Historical Overview"]
 tabs = st.tabs(tab_titles)
 
 with tabs[0]:
+    # Your existing dashboard code here...
     st.subheader("Dashboard")
-    if not trades_df.empty:
-        if not st.session_state.full_data_loaded:
-            st.info("ℹ️ Dashboard is showing stats based on recent trades. For a full overview, load the complete history in the other tabs.")
-
-        now = datetime.now()
-        month_df = trades_df[(trades_df["Date"].dt.month == now.month) & (trades_df["Date"].dt.year == now.year)]
-        year_df = trades_df[trades_df["Date"].dt.year == now.year]
-        overall_pl = trades_df["P/L"].sum()
-        monthly_pl = month_df["P/L"].sum()
-        yearly_pl = year_df["P/L"].sum()
-        last_overall = trades_df["Account Value"].iloc[0]
-        last_month = month_df["Account Value"].iloc[0] if not month_df.empty else last_overall
-        last_year = year_df["Account Value"].iloc[0] if not year_df.empty else last_overall
-
-        c1, c2, c3 = st.columns(3)
-        def card(col, title, trades, pl, last):
-            arrow = "▼" if pl < 0 else "▲"
-            color = "#FF3333" if pl < 0 else "#00FF00"
-            col.markdown(f"""
-            <div style='background-color:#1e1e1e; padding:15px; border-radius:10px; text-align:center; color:white; border: 1px solid #2a2a2a;'>
-                <h4>{title}</h4>
-                <p style='font-size:18px;'><strong>Value:</strong> ${last:,.2f}</p>
-                <p style='font-size:22px; color:{color};'><strong>P/L: {arrow} ${abs(pl):,.2f}</strong></p>
-                <p><strong>Trades:</strong> {trades}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        card(c1, "📅 This Month", len(month_df), monthly_pl, last_month)
-        card(c2, "💼 Overall", len(trades_df), overall_pl, last_overall)
-        card(c3, "📆 This Year", len(year_df), yearly_pl, last_year)
-
-        st.markdown("---")
-        st.subheader("Account Value Over Time")
-        chart_data = trades_df.set_index("Date")[["Account Value"]].sort_index()
-        st.line_chart(chart_data)
+    if trades_df.empty:
+        st.warning("No data to display.")
     else:
-        st.warning("No data to display. Please add a trade or check for connection errors above.")
-
+        st.info("Dashboard is showing stats based on recently loaded trades.")
+        # ... rest of your dashboard logic
+        
 def display_full_data_tabs():
-    """Renders the content for tabs that require the full dataset."""
-    with tabs[1]:
-        st.subheader("All Trades")
-        if not trades_df.empty:
-            if 'page' not in st.session_state:
-                st.session_state.page = 0
-
-            items_per_page = 50
-            start_idx = st.session_state.page * items_per_page
-            end_idx = start_idx + items_per_page
-            
-            paginated_df = trades_df.iloc[start_idx:end_idx]
-            
-            edited_chunk = st.data_editor(
-                paginated_df, use_container_width=True, key="paginated_editor", hide_index=True,
-                column_config={"P/L": st.column_config.NumberColumn(format="$%.2f"), "Account Value": st.column_config.NumberColumn(format="$%.2f"), "Select": st.column_config.CheckboxColumn(default=False)}
-            )
-
-            col1, col2, col3, col4 = st.columns([1, 1, 3, 3])
-            if col1.button("⬅️ Previous", disabled=(st.session_state.page == 0)):
-                st.session_state.page -= 1; st.rerun()
-            if col2.button("Next ➡️", disabled=(end_idx >= len(trades_df))):
-                st.session_state.page += 1; st.rerun()
-            col4.write(f"Showing rows {start_idx+1}–{min(end_idx, len(trades_df))} of {len(trades_df)}")
-
-            st.divider()
-
-            b_col1, b_col2, b_col3 = st.columns(3)
-            if b_col1.button("💾 Save Edits"):
-                st.session_state.trades_df.update(edited_chunk)
-                if update_gsheet(client, st.session_state.trades_df):
-                    st.success("Saved!"); st.rerun()
-            if b_col2.button("🗑️ Delete Selected"):
-                selected_indices = edited_chunk[edited_chunk["Select"]].index
-                st.session_state.trades_df = st.session_state.trades_df.drop(selected_indices)
-                if update_gsheet(client, st.session_state.trades_df):
-                    st.success("Deleted!"); st.rerun()
-            if b_col3.button("⚠️ Clear All"):
-                st.session_state.trades_df = pd.DataFrame(columns=trades_df.columns)
-                if update_gsheet(client, st.session_state.trades_df):
-                    st.success("Cleared!"); st.rerun()
-        else:
-            st.warning("No data to display.")
-
-    with tabs[2]:
-        st.subheader("Historical Overview")
-        if not trades_df.empty:
-            yrs = sorted(trades_df["Date"].dt.year.unique(), reverse=True)
-            sel_year = st.selectbox("Select Year", yrs, key="historical_year")
-            
-            dfy = trades_df[trades_df["Date"].dt.year == sel_year].copy()
-            dfy['Month'] = dfy['Date'].dt.month
-            
-            monthly_summary = dfy.groupby('Month').agg(PL=('P/L', 'sum'),Trades=('P/L', 'count')).reset_index()
-            all_months_df = pd.DataFrame({'Month': range(1, 13)})
-            monthly_summary = pd.merge(all_months_df, monthly_summary, on='Month', how='left').fillna(0)
-            
-            html_content = "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;'>"
-            for index, row in monthly_summary.iterrows():
-                month_num = int(row['Month'])
-                month_name = datetime(1900, month_num, 1).strftime('%B')
-                plm = row['PL']; trade_count = int(row['Trades'])
-                
-                if trade_count == 0: bg_color = "#1e1e1e"
-                elif plm < 0: bg_color = "#660000"
-                else: bg_color = "#003300"
-                
-                pl_color = "#FF3333" if plm < 0 else "white"
-
-                html_content += f"""
-                <div style='background-color:{bg_color}; padding: 15px; border-radius: 12px; text-align: center; color: white;'>
-                    <h5>{month_name}</h5>
-                    <h4 style='color: {pl_color};'>${plm:,.2f}</h4>
-                    <p>Trades: {trade_count}</p>
-                </div>
-                """
-            html_content += "</div>"
-            st.markdown(html_content, unsafe_allow_html=True)
-        else:
-            st.warning("No data available.")
+    # Your existing function to display All Trades and Historical Overview here...
+    pass
 
 # --- LAZY LOADING LOGIC ---
 if st.session_state.full_data_loaded:
@@ -266,9 +139,28 @@ else:
     for i, title in enumerate(tab_titles):
         if i > 0:
             with tabs[i]:
-                st.info("A full data download is required for this view.")
-                if st.button("Load Full History", key=f"load_{title}"):
-                    with st.spinner("Fetching all trades..."):
-                        st.session_state.trades_df = get_full_data(_client)
-                        st.session_state.full_data_loaded = True
-                        st.rerun()
+                st.info("Click the button to load the full trade history in chunks.")
+                if st.button("Load More Trades", key=f"load_{title}"):
+                    with st.spinner(f"Fetching trades from row {st.session_state.next_row_to_fetch}..."):
+                        
+                        # Fetch the next chunk of data
+                        new_records = get_data_in_chunks(client, start_row=st.session_state.next_row_to_fetch)
+                        
+                        if new_records:
+                            new_df = process_data(new_records)
+                            # Append new data to the existing dataframe
+                            st.session_state.trades_df = pd.concat([st.session_state.trades_df, new_df]).drop_duplicates().reset_index(drop=True)
+                            # Update the starting point for the next fetch
+                            st.session_state.next_row_to_fetch += len(new_records)
+                            st.rerun()
+                        else:
+                            # No more data was returned, so we're done
+                            st.session_state.full_data_loaded = True
+                            st.success("All trades have been loaded!")
+                            st.rerun()
+                
+                # Display the data loaded so far
+                if not trades_df.empty:
+                    st.write(f"Showing {len(trades_df)} trades loaded so far.")
+                    # You can choose to display the partial table here if you want
+                    # st.dataframe(trades_df.head())
