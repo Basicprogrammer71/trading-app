@@ -8,19 +8,14 @@ st.title("Mobile Loading Diagnostic Test")
 # --- Connection Function ---
 @st.cache_resource
 def get_gspread_client():
-    """Connects to Google Sheets."""
+    """Connects to Google Sheets using a secret file."""
     try:
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds_dict = st.secrets["gcp_service_account"]
-        client = gspread.service_account_from_dict(creds_dict, scopes=scopes)
+        # This line tells gspread to find the credentials in a file
+        client = gspread.service_account(filename="google_credentials.json")
         return client
     except Exception as e:
         st.error(f"🚨 Connection Error: {e}")
         return None
-
 # --- Test Execution ---
 client = get_gspread_client()
 
