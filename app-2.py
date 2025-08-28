@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import gspread
 from datetime import datetime
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -93,6 +96,65 @@ def update_gsheet(client, df):
     except Exception as e:
         st.error(f"🚨 Failed to update sheet: {e}")
         return False
+# --- Machine Learning Functions ---
+def aggregate_data_for_model(df):
+    """Aggregates raw trade data into a weekly format for the ML model."""
+    if df.empty or 'P/L' not in df.columns:
+        return pd.DataFrame()
+    
+    # Ensure the DataFrame index is the date for resampling
+    df_resample = df.set_index('Date')
+    
+    # Aggregate data by week
+    weekly_summary = df_resample['P/L'].resample('W').agg(
+        num_trades='count',
+        net_profit='sum'
+    ).reset_index()
+
+    # Feature Engineering: Create the features the model needs
+    wins_df = df[df['P/L'] > 0].set_index('Date')['P/L'].resample('W').agg(win_count='count', avg_win='mean').reset_index()
+    losses_df = df[df['P/L'] < 0].set_index('Date')['P/L'].resample('W').agg(avg_loss='mean').reset_index()
+
+    # Merge features back into the weekly summary
+    weekly_summary = pd.merge(weekly_summary, wins_df, on='Date', how='left')
+    weekly_summary = pd.merge(weekly_summary, losses_df, on='Date', how='left')
+    
+    weekly_summary['win_rate'] = weekly_summary['win_count'] / weekly_summary['num_trades']
+
+    # This is our target variable: the profit of the *next* week
+    weekly_summary['next_week_profit'] = weekly_summary['net_profit'].shift(-1)
+    
+    # Fill any empty values and drop the last row which has no target
+    weekly_summary = weekly_summary.fillna(0).dropna()
+    
+    return weekly_summary
+
+def train_and_predict(df):
+    """Trains a model and predicts the next week's profit."""
+    weekly_df = aggregate_data_for_model(df)
+    
+    # Check if there's enough data to train (need at least 3 weeks of data)
+    if len(weekly_df) < 3:
+        return None, "Not enough weekly data to train. Please add more trades."
+
+    # Define features and target
+    features = ['num_trades', 'win_rate', 'avg_win', 'avg_loss']
+    target = 'next_week_profit'
+    
+    X = weekly_df[features]
+    y = weekly_df[target]
+    
+    # Create and train the Linear Regression model
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Get the most recent week's data to make a prediction for the *next* week
+    latest_week_features = weekly_df[features].iloc[[-1]] # Use last row
+    
+    # Make the prediction
+    prediction = model.predict(latest_week_features)
+    
+    return prediction[0], f"Prediction based on {len(weekly_df)} weeks of data."
 
 # --- Main App Logic ---
 st.markdown("<h1 style='text-align: center;'>Trade Tracker</h1>", unsafe_allow_html=True)
@@ -133,7 +195,7 @@ with st.sidebar:
             st.rerun()
 
 # --- Main Content Tabs ---
-tab_titles = ["Dashboard", "All Trades", "Historical Overview"]
+tab_titles = ["Dashboard", "All Trades", "Historical Overview", "Prediction"]
 tabs = st.tabs(tab_titles)
 
 # Dashboard Tab
@@ -306,3 +368,41 @@ with tabs[2]:
                     """, unsafe_allow_html=True)
     else:
         st.warning("No data available.")
+
+
+# Prediction Tab
+with tabs[3]:
+    st.subheader("Next Week's Profit Prediction")
+
+    # Ensure full data is loaded before attempting to predict
+    if not st.session_state.full_data_loaded:
+        st.info("Loading all trades to generate prediction...")
+        st.session_state.trades_df = get_full_data(client)
+        st.session_state.full_data_loaded = True
+        st.rerun()
+
+    trades_df = st.session_state.trades_df
+    if not trades_df.empty:
+        with st.spinner("Analyzing trading patterns..."):
+            prediction, status_message = train_and_predict(trades_df)
+
+        if prediction is not None:
+            st.markdown(f"""
+            <div style='background-color:#1e1e1e; padding:25px; border-radius:10px; text-align:center; color:white; border: 1px solid #2a2a2a;'>
+                <h4>Predicted Profit for Next Week</h4>
+                <p style='font-size:48px; color:#8A2BE2; font-weight:bold; margin-top:10px; margin-bottom:10px;'>
+                    ${prediction:,.2f}
+                </p>
+                <p style='color:#666;'>{status_message}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            st.info("""
+            **Disclaimer:** This prediction is based on a Linear Regression model analyzing your past trading habits (number of trades, win rate, average win/loss). 
+            It is for educational and informational purposes only and is **not financial advice**. Market conditions are not factored into this model.
+            """)
+        else:
+            st.warning(status_message)
+    else:
+        st.warning("No data available to make a prediction.")
